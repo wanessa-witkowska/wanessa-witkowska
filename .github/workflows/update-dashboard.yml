@@ -1,0 +1,77 @@
+
+name: Update profile dashboard
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays and Thursdays at 06:17 UTC
+    - cron: '17 6 * * 1,4'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: profile-dashboard
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout profile repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate aggregate dashboard
+        env:
+          GH_STATS_TOKEN: ${{ secrets.GH_STATS_TOKEN }}
+        run: python scripts/update_dashboard.py
+
+      - name: Commit generated SVG if changed
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- assets/language-chart.svg; then
+            echo "Dashboard unchanged."
+            exit 0
+          fi
+
+          git add assets/language-chart.svg
+          git commit -m "chore: refresh aggregate repository dashboard"
+
+          for attempt in 1 2 3; do
+            echo "Push attempt: $attempt"
+
+            git fetch origin main
+
+            if ! git rebase origin/main; then
+              echo "Rebase conflict detected."
+              git rebase --abort
+              exit 1
+            fi
+
+            if git push origin HEAD:main; then
+              echo "Dashboard successfully updated!"
+              exit 0
+            fi
+
+            echo "Remote branch changed. Retrying..."
+            sleep 3
+          done
+
+          echo "Failed to push dashboard after 3 attempts."
+          exit 1
